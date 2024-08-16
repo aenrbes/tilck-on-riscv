@@ -762,7 +762,7 @@ pdir_destroy_int(pdir_t *pdir, u32 pd_idx, u32 level)
 
          const ulong paddr = (ulong)pdir->entries[j].pfn << PAGE_SHIFT;
 
-         if (pf_ref_count_dec(paddr) == 0)
+         if (!KERNEL_NOMMU && (pf_ref_count_dec(paddr) == 0))
             kfree2(PA_TO_LIN_VA(paddr), PAGE_SIZE);
       }
 

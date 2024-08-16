@@ -272,11 +272,24 @@ BRUTALLY forces the build system to use tc's sysroot \
 for system headers even when a system compiler is used.\
 ")
 
-set(FORK_NO_COW OFF CACHE BOOL
+set(KERNEL_NOMMU ON CACHE BOOL "Non-mmu")
+
+if (${KERNEL_NOMMU})
+   set(KERNEL_STACK_ISOLATION OFF CACHE BOOL
+    "Put the kernel stack in hi the vmem in isolated pages" FORCE)
+
+   set(FORK_NO_COW ON CACHE BOOL
     "Make fork() to perform a full-copy instead of using copy-on-write")
 
-set(MMAP_NO_COW OFF CACHE BOOL
+   set(MMAP_NO_COW ON CACHE BOOL
     "Make mmap() to allocate real memory instead mapping the zero-page + COW")
+else()
+   set(FORK_NO_COW OFF CACHE BOOL
+    "Make fork() to perform a full-copy instead of using copy-on-write")
+
+   set(MMAP_NO_COW OFF CACHE BOOL
+    "Make mmap() to allocate real memory instead mapping the zero-page + COW")
+endif()
 
 set(PANIC_SHOW_REGS OFF CACHE BOOL
     "Show the content of the main registers in case of kernel panic")
@@ -471,6 +484,7 @@ list(
    KRN32_LIN_VADDR
    USERAPPS_busybox
    TRACE_PRINTK_ENABLED_ON_BOOT
+   KERNEL_NOMMU
 
    # Boolean options DISABLED by default
    KERNEL_UBSAN

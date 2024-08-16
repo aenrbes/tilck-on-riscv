@@ -147,13 +147,23 @@ static ALWAYS_INLINE bool hw_is_fpu_enabled(void)
 
 static ALWAYS_INLINE void __set_curr_pdir(ulong paddr)
 {
+#if KERNEL_NOMMU
+   extern void *__curr_pdir;
+   __curr_pdir = (void *)paddr;
+#else
    csr_write(CSR_SATP, (paddr >> PAGE_SHIFT) | SATP_MODE);
    asmVolatile("sfence.vma" : : : "memory");
+#endif
 }
 
 static ALWAYS_INLINE ulong __get_curr_pdir()
 {
+#if KERNEL_NOMMU
+   extern void *__curr_pdir;
+   return (ulong)__curr_pdir;
+#else
    return (csr_read(CSR_SATP) & SATP_PPN) << PAGE_SHIFT;
+#endif
 }
 
 /*
@@ -161,7 +171,11 @@ static ALWAYS_INLINE ulong __get_curr_pdir()
  */
 static ALWAYS_INLINE void invalidate_page_hw(ulong vaddr)
 {
+#if KERNEL_NOMMU
+   /* do nothing */
+#else
    asmVolatile("sfence.vma %0" : : "r" (vaddr) : "memory");
+#endif
 }
 
 static ALWAYS_INLINE void flush_icache_all(void)

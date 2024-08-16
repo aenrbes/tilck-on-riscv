@@ -28,6 +28,9 @@ struct kmalloc_heap *hi_vmem_heap;
 
 void *ioremap(ulong paddr, size_t size)
 {
+#if KERNEL_NOMMU
+   return (void *)paddr;
+#else
    ulong offset;
    size_t count;
    size_t page_count;
@@ -58,10 +61,14 @@ void *ioremap(ulong paddr, size_t size)
 
    set_pages_io(get_kernel_pdir(), vaddr, size);
    return vaddr + offset;
+#endif
 }
 
 void iounmap(void *vaddr)
 {
+#if KERNEL_NOMMU
+   /* do nothing */
+#else
    size_t size = 0;
 
    ASSERT(IS_PAGE_ALIGNED(vaddr));
@@ -73,6 +80,7 @@ void iounmap(void *vaddr)
    ASSERT(IS_PAGE_ALIGNED(size));
 
    unmap_kernel_pages(vaddr, size / PAGE_SIZE, false);
+#endif
 }
 
 void retain_pageframes_mapped_at(pdir_t *pdir, void *vaddrp, size_t len)
@@ -118,8 +126,10 @@ void invalidate_page(ulong vaddr)
 
 void init_paging(void)
 {
+#if !KERNEL_NOMMU
    int rc;
    void *user_vdso_vaddr;
+#endif
    size_t pagesframes_refcount_bufsize;
 
    /* get_phys_mem_size() assumes that the physical address starts from zero */
@@ -146,6 +156,7 @@ void init_paging(void)
 
    pf_ref_count_inc(KERNEL_VA_TO_PA(zero_page));
 
+#if !KERNEL_NOMMU
    /* Initialize the kmalloc heap used for the "hi virtual mem" area */
    init_hi_vmem_heap();
 
@@ -169,6 +180,7 @@ void init_paging(void)
 
    if (rc < 0)
       panic("Unable to map the vdso-like page");
+#endif
 }
 
 void *
@@ -193,7 +205,7 @@ map_framebuffer(pdir_t *pdir,
    if (!vaddr) {
 
       ASSERT(!user_mmap); /* user mappings always have a vaddr at this layer */
-      vaddr = (ulong) hi_vmem_reserve(size);
+      vaddr = KERNEL_NOMMU ? paddr : (ulong) hi_vmem_reserve(size);
 
       if (!vaddr) {
 

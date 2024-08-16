@@ -11,8 +11,8 @@
       "**/.DS_Store": true,
       "**/.d": true,
       "toolchain/**": true,
-      "toolchain2/**": true,
-      "build/**": true,
+      "toolchain2/**": false,
+      "build/**": false,
       "*_build/**": true,
       "*_builds/**": true,
       "CMakeFiles/**": true,
@@ -228,6 +228,9 @@
       "mod_sb16.h": "c",
       "mod_pci.h": "c",
       "mod_sysfs.h": "c",
-      "mod_debugpanel.h": "c"
+      "mod_debugpanel.h": "c",
+      "acpi.h": "c",
+      "efiapi.h": "c",
+      "kd.h": "c"
    },
 }

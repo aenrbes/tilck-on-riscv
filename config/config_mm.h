@@ -13,7 +13,6 @@
 #define USER_STACK_PAGES       @USER_STACK_PAGES@
 
 /* --------- Boolean config variables --------- */
-
 #cmakedefine01 FORK_NO_COW
 #cmakedefine01 MMAP_NO_COW
 
@@ -36,7 +35,11 @@
 #define HI_VMEM_START    (BASE_VA + 896 * MB)
 #define HI_VMEM_SIZE             (128ul * MB)
 
-#define USER_VDSO_VADDR       (HI_VMEM_START)
+#if KERNEL_NOMMU
+   #define USER_VDSO_VADDR       (vdso_begin)
+#else
+   #define USER_VDSO_VADDR       (HI_VMEM_START)
+#endif
 
 #define USERMODE_VADDR_END          (BASE_VA) /* biggest user vaddr + 1 */
 #define MAX_BRK                  (0x40000000) /* +1 GB (virtual memory) */
@@ -46,3 +49,5 @@
 
 #define USERMODE_STACK_MAX \
    ((USERMODE_VADDR_END - 1) & ALIGNED_MASK(USERMODE_STACK_ALIGN))
+
+#define NOMMU_BRK_SIZE        (USER_STACK_PAGES * PAGE_SIZE)//todo

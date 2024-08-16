@@ -122,17 +122,24 @@ void full_remove_user_mapping(struct process *pi, struct user_mapping *um)
    size_t actual_len = um->len;
 
    ASSERT(mi);
+#if !KERNEL_NOMMU
    ASSERT(mi->mmap_heap);
+#endif
 
    if (um->h)
       vfs_munmap(um, um->vaddrp, actual_len);
 
+#if !KERNEL_NOMMU
    per_heap_kfree(mi->mmap_heap,
                   um->vaddrp,
                   &actual_len,
                   KFREE_FL_ALLOW_SPLIT |
                   KFREE_FL_MULTI_STEP  |
                   KFREE_FL_NO_ACTUAL_FREE);
+#else
+   if (!um->h)
+      task_temp_kernel_free(um->vaddrp);
+#endif
 
    process_remove_user_mapping(um);
 }

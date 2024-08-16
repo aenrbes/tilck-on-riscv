@@ -38,6 +38,7 @@
 
 #cmakedefine01 FAT_TEST_DIR
 #cmakedefine01 DEBUG_CHECKS
+#cmakedefine01 KERNEL_NOMMU
 
 /* ----------- Convenience defines ------------ */
 

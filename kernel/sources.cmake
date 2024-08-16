@@ -25,3 +25,15 @@ if (KERNEL_SELFTESTS)
 endif()
 
 file(GLOB KERNEL_NOARCH_SOURCES ${GLOB_CONF_DEP} ${KERNEL_NOARCH_SOURCES_GLOB})
+
+if (KERNEL_NOMMU)
+   list(
+      REMOVE_ITEM KERNEL_NOARCH_SOURCES
+      "${CMAKE_SOURCE_DIR}/kernel/mm/process_mm.c"
+   )
+else()
+   list(
+      REMOVE_ITEM KERNEL_NOARCH_SOURCES
+      "${CMAKE_SOURCE_DIR}/kernel/mm/process_mm_nommu.c"
+   )
+endif()

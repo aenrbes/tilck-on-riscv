@@ -38,6 +38,27 @@
    #error Architecture not supported.
 #endif
 
+#if KERNEL_NOMMU
+#define FLAT_VERSION     0x4
+#define FLAT_FLAG_RAM    0x0001
+#define FLAT_FLAG_GOTPIC 0x0002
+
+struct bflt_hdr {
+   char magic[4];
+   u32 rev;
+   u32 entry;
+   u32 data_start;
+   u32 data_end;
+   u32 bss_end;
+   u32 stack_size;
+   u32 reloc_start;
+   u32 reloc_count;
+   u32 flags;
+   u32 build_date;
+   u32 filler[5];
+};
+#endif
+
 typedef int (*load_segment_func)(fs_handle *, pdir_t *, Elf_Phdr *, ulong *);
 
 static int
@@ -363,6 +384,7 @@ is_dyn_exec(struct elf_headers *eh)
    return false;
 }
 
+#if !KERNEL_NOMMU
 int
 load_elf_program(const char *filepath,
                  char *header_buf,
@@ -485,6 +507,214 @@ out:
 
    return rc;
 }
+
+#else
+
+static int
+load_bflt_binary(fs_handle *elf_h,
+                 pdir_t *pdir,
+                 struct bflt_hdr *hdr,
+                 ulong *end_vaddr_ref,
+                 ulong *entry_vaddr_ref)
+{
+   offt rc;
+   u32 *reloc_sym_off;
+   void *vaddr, *reloc_va;
+   const size_t relocsz = hdr->reloc_count * sizeof(u32);
+   const size_t filesz = hdr->data_end - hdr->entry;
+   const size_t memsz = hdr->bss_end - hdr->entry;
+   const size_t page_count = ((memsz + PAGE_SIZE - 1) + 1) / PAGE_SIZE;
+
+   /* 1. Load bFLT file into memory */
+
+   rc = vfs_seek(elf_h, (offt)hdr->entry, SEEK_SET);
+
+   if (rc < 0)
+      return (int)rc; /* I/O error during seek */
+
+   if (rc != (ssize_t)hdr->entry)
+      return -ENOEXEC;
+
+   if (!(vaddr = task_temp_kernel_alloc(page_count * PAGE_SIZE)))
+      return -ENOMEM;
+
+   if ((rc = map_pages(pdir, vaddr, (ulong)vaddr, page_count, PAGING_FL_RWUS))) {
+      task_temp_kernel_free(vaddr);
+      return (int)rc;
+   }
+
+   rc = vfs_read(elf_h, vaddr, filesz);
+   if (rc < 0)
+      return (int)rc;            /* I/O error during read */
+
+   if (rc < (ssize_t)filesz)
+      return -ENOEXEC;      /* The bFLT file is corrupted */
+
+   /* Clear bss */
+   memset(vaddr + filesz, 0, hdr->bss_end - hdr->data_end);
+
+   /* 2. Process relocation symbols */
+
+   rc = vfs_seek(elf_h, (offt)hdr->reloc_start, SEEK_SET);
+
+   if (rc < 0)
+      return (int)rc; /* I/O error during seek */
+
+   if (rc != (ssize_t)hdr->reloc_start)
+      return -ENOEXEC;
+
+   if (!(reloc_va = task_temp_kernel_alloc(relocsz)))
+      return -ENOMEM;
+
+   rc = vfs_read(elf_h, reloc_va, relocsz);
+   if (rc < 0)
+      return (int)rc;            /* I/O error during read */
+
+   if (rc < (ssize_t)relocsz)
+      return -ENOEXEC;      /* The bFLT file is corrupted */
+
+   reloc_sym_off = reloc_va;
+
+   for (u32 i = 0; i < hdr->reloc_count; i++, reloc_sym_off++) {
+
+      ulong *reloc_sym;
+
+      *reloc_sym_off = be32toh(*reloc_sym_off);
+      reloc_sym = (ulong *)((ulong)vaddr + *reloc_sym_off);
+      *reloc_sym = be32toh(*reloc_sym);
+      *reloc_sym += (ulong)vaddr;
+   }
+
+   *end_vaddr_ref = (ulong)vaddr + (page_count << PAGE_SHIFT);
+   *entry_vaddr_ref = (ulong)vaddr;
+   return 0;
+}
+
+static int
+load_bflt_header(fs_handle bflt_h, char *hdr_buf)
+{
+   offt rc;
+   struct bflt_hdr *hdr = (void *)hdr_buf;
+
+   if ((rc = vfs_seek(bflt_h, 0, SEEK_SET)))
+      return -EIO;
+
+   rc = vfs_read(bflt_h, hdr_buf, sizeof(struct bflt_hdr));
+
+   if (rc < (int)sizeof(struct bflt_hdr))
+      return -ENOEXEC;
+
+   if (strncmp((const char *)hdr->magic, "bFLT", 4))
+      return -ENOEXEC;
+
+   for (u32 *ptr = &hdr->rev; ptr <= &hdr->build_date; ptr++) {
+
+      *ptr = be32toh(*ptr);
+   }
+
+   if (hdr->rev != FLAT_VERSION)
+      return -ENOEXEC;
+
+   if (hdr->flags & (~FLAT_FLAG_RAM))
+      return -ENOEXEC;
+
+   return 0;
+}
+
+int
+load_elf_program(const char *filepath,
+                 char *hdr_buf,
+                 struct elf_program_info *pinfo)
+{
+   fs_handle bflt_h = NULL;
+   struct bflt_hdr *hdr = (void *)hdr_buf;
+   ulong brk = 0, end_vaddr = 0, entry_vaddr = 0;
+   int rc;
+
+   pinfo->wrong_arch = false;
+   pinfo->dyn_exec = false;
+
+   if ((rc = open_elf_file(filepath, &bflt_h)))
+      return rc;
+
+   if ((rc = acquire_subsys_flock_h(bflt_h, SUBSYS_PROCMGNT, &pinfo->lf))) {
+      vfs_close(bflt_h);
+      return rc == -EBADF ? -ENOEXEC : rc;
+   }
+
+   if ((rc = load_bflt_header(bflt_h, hdr_buf))) {
+      vfs_close(bflt_h);
+      return rc;
+   }
+
+   if (hdr->flags & FLAT_FLAG_GOTPIC) {
+      pinfo->dyn_exec = true;
+      rc = -ENOEXEC;
+      goto out;
+   }
+
+   ASSERT(pinfo->pdir == NULL);
+
+   if (!(pinfo->pdir = pdir_clone(get_kernel_pdir()))) {
+      rc = -ENOMEM;
+      goto out;
+   }
+
+   rc = load_bflt_binary(bflt_h,
+                         pinfo->pdir,
+                         hdr,
+                         &end_vaddr,
+                         &entry_vaddr);
+   if (rc < 0)
+      goto out;
+
+   brk = end_vaddr - PAGE_SIZE;
+
+   /* Mapping the user stack. */
+
+   STATIC_ASSERT(MMAP_NO_COW);
+   size_t user_stack_pages = USER_ARGS_PAGE_COUNT +
+                             (hdr->stack_size << PAGE_SHIFT);
+   void *stack_top = task_temp_kernel_alloc(user_stack_pages * PAGE_SIZE);
+   ulong stack_bottom = (ulong)stack_top + user_stack_pages * PAGE_SIZE - 1;
+
+   if (!stack_top) {
+      rc = -ENOMEM;
+      goto out;
+   }
+
+   rc = map_pages(pinfo->pdir,
+                  stack_top,
+                  (ulong)stack_top,
+                  user_stack_pages,
+                  PAGING_FL_RW | PAGING_FL_US);
+
+   if (rc)
+      goto out;
+
+   // Finally setting the output-params.
+
+   pinfo->stack = (void *)(stack_bottom & POINTER_ALIGN_MASK);
+   pinfo->entry = (void *)entry_vaddr;
+   pinfo->brk = (void *)brk;
+
+out:
+   vfs_close(bflt_h);
+
+   if (UNLIKELY(rc != 0)) {
+
+      if (pinfo->pdir) {
+         pdir_destroy(pinfo->pdir);
+         pinfo->pdir = NULL;
+      }
+
+      if (pinfo->lf)
+         release_subsys_flock(pinfo->lf);
+   }
+
+   return rc;
+}
+#endif /* !KERNEL_NOMMU */
 
 void get_symtab_and_strtab(Elf_Shdr **symtab, Elf_Shdr **strtab)
 {
